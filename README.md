@@ -40,7 +40,7 @@ RT_Insight 是基于 RT-Thread 内核的**系统事件洞察组件**，核心功
 RT_Insight 需在 RT-Tunnel 初始化后启动，推荐初始化顺序：
 
 1. **初始化 RT-Tunnel**：确保 `RT_Tunnel_Init` 先执行（通常自动初始化）；
-2. **初始化 RT_Insight **：调用 `RT_Vterm_Init` 分配隧道并初始化insight功能；
+2. **初始化 RT_Insight**：调用 `RT_Insight_Init` 分配隧道并初始化insight功能；
 
 
 
