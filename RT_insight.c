@@ -26,7 +26,7 @@
 rt_tick_t Time_Stamp_Tick;    /**< Current OS tick count */
 uint64_t  Time_Stamp_ns;      /**< Current time in nanoseconds */
 uint64_t  Per_OSTick_ns;      /**< Duration of one OS tick (ns) */
-double  Per_SysTick_Cnt_ns; /**< Duration per SysTick count (ns) */
+double    Per_SysTick_Cnt_ns; /**< Duration per SysTick count (ns) */
 
 uint32_t SysTick_Timer_Cnt;    /**< Current SysTick counter value */
 uint32_t SysTick_Timer_Reload; /**< SysTick reload value */
@@ -53,7 +53,8 @@ uint32_t        Temp_Info_Buffer_Last_Index        = 0;   /**< Last successfully
  */
 static void rt_view_scheduler_hook(rt_thread_t from_thread, rt_thread_t to_thread)
 {
-    if(from_thread){
+    if (from_thread)
+    {
         Event_Record((uint32_t)&from_thread->sp, THREAD_EXIT);
         Event_Record((uint32_t)&to_thread->sp, THREAD_RUN);
     }
@@ -223,7 +224,7 @@ int CPU_TS_TmrInit(void)
  * @brief Get current CPU timestamp in nanoseconds.
  * @note  Combines DWT low/high counter to form 64-bit time.
  */
-static uint64_t Get_Time_Stamp_ns(uint8_t add_flag)
+static uint64_t Get_Time_Stamp_ns(void)
 {
     uint32_t DWT_Cnt = *(volatile uint32_t *)DWT_CYCCNT;
 
