@@ -53,8 +53,10 @@ uint32_t        Temp_Info_Buffer_Last_Index        = 0;   /**< Last successfully
  */
 static void rt_view_scheduler_hook(rt_thread_t from_thread, rt_thread_t to_thread)
 {
-    Event_Record((uint32_t)&from_thread->sp, THREAD_EXIT);
-    Event_Record((uint32_t)&to_thread->sp, THREAD_RUN);
+    if(from_thread){
+        Event_Record((uint32_t)&from_thread->sp, THREAD_EXIT);
+        Event_Record((uint32_t)&to_thread->sp, THREAD_RUN);
+    }
 }
 
 /**
@@ -312,7 +314,7 @@ static void Event_Record(uint32_t ID, uint32_t track_type)
  *
  * @retval int 0 on success, non-zero on failure.
  */
-static int RT_Insight_Init(void)
+int RT_Insight_Init(void)
 {
     Event_Num_Cnt        = 0;
     SysTick_Timer_Reload = *(volatile uint32_t *)SysTick_Reload_Register;

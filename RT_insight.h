@@ -112,6 +112,6 @@ static void Event_Record(uint32_t ID, uint32_t track_type);
  *
  * @retval int  0 on success, negative value on error
  */
-static int RT_Insight_Init(void);
+int RT_Insight_Init(void);
 
 #endif // __RT_INSIGHT_H__
