@@ -42,6 +42,113 @@ uint32_t        Temp_Info_Buffer_Index             = 0;   /**< Current write ind
 uint32_t        Temp_Info_Buffer_Last_Index        = 0;   /**< Last successfully written index in the temporary buffer */
 
 /* ============================================================
+ *                   Time & Event Utilities
+ * ============================================================ */
+
+/**
+ * @brief Initialize DWT timer for precise CPU time measurement.
+ */
+int CPU_TS_TmrInit(void)
+{
+    /* Enable DWT trace and cycle counter */
+    *(volatile uint32_t *)CoreDebug_DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+
+    /* Reset DWT cycle counter */
+    *(volatile uint32_t *)DWT_CYCCNT = 0;
+
+    /* Enable DWT cycle counter */
+    *(volatile uint32_t *)DWT_CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+
+    return 0;
+}
+
+/**
+ * @brief Get current CPU timestamp in nanoseconds.
+ * @note  Combines DWT low/high counter to form 64-bit time.
+ */
+static uint64_t Get_Time_Stamp_ns(void)
+{
+    uint32_t DWT_Cnt = *(volatile uint32_t *)DWT_CYCCNT;
+
+    /* Handle DWT counter overflow */
+    if (DWT_Cnt < DWT_Last_Cnt)
+    {
+        DWT_Timer_hi += 1;
+    }
+    DWT_Last_Cnt = DWT_Cnt;
+
+    uint64_t full_cycle = ((uint64_t)DWT_Timer_hi << 32) | DWT_Cnt;
+    uint64_t time_ns    = (uint64_t)(Per_SysTick_Cnt_ns * full_cycle);
+
+    return time_ns;
+}
+
+/* ============================================================
+ *                   Event Recording Logic
+ * ============================================================ */
+
+/**
+ * @brief Record an insight event to tunnel.
+ *
+ * @param[in] ID         Event ID or object identifier
+ * @param[in] track_type Event type (thread, ISR, object, timer)
+ */
+static void Event_Record(uint32_t ID, uint32_t track_type)
+{
+    int32_t         write_res    = 0;
+    RT_insight_info Insight_Info = {0};
+
+    /* Generate timestamp */
+    Time_Stamp_ns = Get_Time_Stamp_ns();
+
+    /* Fill event structure */
+    Insight_Info.Frame_Header     = Frame_Header_Reserve_Value | (Event_Num_Cnt & 0xFFFF);
+    Insight_Info.ID               = ID;
+    Insight_Info.Track_Type       = track_type;
+    Insight_Info.Time_Stamp_ns_lo = (uint32_t)(Time_Stamp_ns & 0xFFFFFFFF);
+    Insight_Info.Time_Stamp_ns_hi = (uint32_t)(Time_Stamp_ns >> 32);
+
+    /* Handle pending buffer (atomic update) */
+    rt_base_t level             = rt_hw_interrupt_disable();
+    uint32_t  Last_Index        = Temp_Info_Buffer_Last_Index;
+    uint32_t  Index             = Temp_Info_Buffer_Index;
+    Temp_Info_Buffer_Last_Index = Temp_Info_Buffer_Index;
+    rt_hw_interrupt_enable(level);
+
+    /* Try to flush previous buffered events first */
+    if (Index != Last_Index)
+    {
+        uint32_t len = (Index > Last_Index) ? (Index - Last_Index) : (Index + TEMP_BUFFER_SIZE - Last_Index);
+
+        for (uint32_t i = 0; i < len; i++)
+        {
+            write_res = Tunnel->write(Tunnel, (void *)&Temp_Info_Buffer[Last_Index], sizeof(RT_insight_info));
+            if (write_res != sizeof(RT_insight_info))
+            {
+                break;
+            }
+
+            Last_Index = (Last_Index + 1) % TEMP_BUFFER_SIZE;
+        }
+
+        Temp_Info_Buffer_Last_Index = Last_Index;
+    }
+
+    /* Attempt to write the new event */
+    write_res = Tunnel->write(Tunnel, (void *)&Insight_Info, sizeof(RT_insight_info));
+
+    /* If write fails (-2 = tunnel busy), store into temp buffer */
+    if ((write_res == TUNNEL_BUSY_CODE) && ((Tunnel->status & STATUS_BUFFER_Msk) == STATUS_BUFFER_AVAILABLE))
+    {
+        rt_memcpy(&Temp_Info_Buffer[Temp_Info_Buffer_Index], &Insight_Info, sizeof(Insight_Info));
+        Temp_Info_Buffer_Index = (Temp_Info_Buffer_Index + 1) % TEMP_BUFFER_SIZE;
+    }
+
+    /* Update event counter */
+    Event_Num_Cnt++;
+}
+
+/* ============================================================
  *               RT-Thread Hook Implementations
  * ============================================================ */
 
@@ -197,113 +304,6 @@ static void rt_view_timer_enter_hook(rt_timer_t t)
 static void rt_view_timer_exit_hook(rt_timer_t t)
 {
     Event_Record((uint32_t)t->parent.name, TIMER_EXIT);
-}
-
-/* ============================================================
- *                   Time & Event Utilities
- * ============================================================ */
-
-/**
- * @brief Initialize DWT timer for precise CPU time measurement.
- */
-int CPU_TS_TmrInit(void)
-{
-    /* Enable DWT trace and cycle counter */
-    *(volatile uint32_t *)CoreDebug_DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
-
-    /* Reset DWT cycle counter */
-    *(volatile uint32_t *)DWT_CYCCNT = 0;
-
-    /* Enable DWT cycle counter */
-    *(volatile uint32_t *)DWT_CTRL |= DWT_CTRL_CYCCNTENA_Msk;
-
-    return 0;
-}
-
-/**
- * @brief Get current CPU timestamp in nanoseconds.
- * @note  Combines DWT low/high counter to form 64-bit time.
- */
-static uint64_t Get_Time_Stamp_ns(void)
-{
-    uint32_t DWT_Cnt = *(volatile uint32_t *)DWT_CYCCNT;
-
-    /* Handle DWT counter overflow */
-    if (DWT_Cnt < DWT_Last_Cnt)
-    {
-        DWT_Timer_hi += 1;
-    }
-    DWT_Last_Cnt = DWT_Cnt;
-
-    uint64_t full_cycle = ((uint64_t)DWT_Timer_hi << 32) | DWT_Cnt;
-    uint64_t time_ns    = (uint64_t)(Per_SysTick_Cnt_ns * full_cycle);
-
-    return time_ns;
-}
-
-/* ============================================================
- *                   Event Recording Logic
- * ============================================================ */
-
-/**
- * @brief Record an insight event to tunnel.
- *
- * @param[in] ID         Event ID or object identifier
- * @param[in] track_type Event type (thread, ISR, object, timer)
- */
-static void Event_Record(uint32_t ID, uint32_t track_type)
-{
-    int32_t         write_res    = 0;
-    RT_insight_info Insight_Info = {0};
-
-    /* Generate timestamp */
-    Time_Stamp_ns = Get_Time_Stamp_ns(0);
-
-    /* Fill event structure */
-    Insight_Info.Frame_Header     = Frame_Header_Reserve_Value | (Event_Num_Cnt & 0xFFFF);
-    Insight_Info.ID               = ID;
-    Insight_Info.Track_Type       = track_type;
-    Insight_Info.Time_Stamp_ns_lo = (uint32_t)(Time_Stamp_ns & 0xFFFFFFFF);
-    Insight_Info.Time_Stamp_ns_hi = (uint32_t)(Time_Stamp_ns >> 32);
-
-    /* Handle pending buffer (atomic update) */
-    rt_base_t level             = rt_hw_interrupt_disable();
-    uint32_t  Last_Index        = Temp_Info_Buffer_Last_Index;
-    uint32_t  Index             = Temp_Info_Buffer_Index;
-    Temp_Info_Buffer_Last_Index = Temp_Info_Buffer_Index;
-    rt_hw_interrupt_enable(level);
-
-    /* Try to flush previous buffered events first */
-    if (Index != Last_Index)
-    {
-        uint32_t len = (Index > Last_Index) ? (Index - Last_Index) : (Index + TEMP_BUFFER_SIZE - Last_Index);
-
-        for (uint32_t i = 0; i < len; i++)
-        {
-            write_res = Tunnel->write(Tunnel, (void *)&Temp_Info_Buffer[Last_Index], sizeof(RT_insight_info));
-            if (write_res != sizeof(RT_insight_info))
-            {
-                break;
-            }
-
-            Last_Index = (Last_Index + 1) % TEMP_BUFFER_SIZE;
-        }
-
-        Temp_Info_Buffer_Last_Index = Last_Index;
-    }
-
-    /* Attempt to write the new event */
-    write_res = Tunnel->write(Tunnel, (void *)&Insight_Info, sizeof(RT_insight_info));
-
-    /* If write fails (-2 = tunnel busy), store into temp buffer */
-    if ((write_res == TUNNEL_BUSY_CODE) && ((Tunnel->status & STATUS_BUFFER_Msk) == STATYS_BUFFER_AVAILABLE))
-    {
-        rt_memcpy(&Temp_Info_Buffer[Temp_Info_Buffer_Index], &Insight_Info, sizeof(Insight_Info));
-        Temp_Info_Buffer_Index = (Temp_Info_Buffer_Index + 1) % TEMP_BUFFER_SIZE;
-    }
-
-    /* Update event counter */
-    Event_Num_Cnt++;
 }
 
 /* ============================================================
